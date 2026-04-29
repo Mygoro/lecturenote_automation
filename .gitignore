@@ -1,0 +1,16 @@
+# 민감한 인증 정보
+.env
+token.json
+google_credentials.json
+
+# 처리 상태 파일 (로컬 전용)
+processed_files.json
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 임시 파일
+temp_audio/

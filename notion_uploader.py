@@ -9,8 +9,13 @@ Notion API로 강의 노트 데이터베이스에 페이지를 생성하는 모�
 - 태그 (multi_select) — 자동요약, AI요약 태그 자동 부여
 """
 
+from __future__ import annotations
 from datetime import datetime, date as date_type
+from typing import TYPE_CHECKING
 from notion_client import Client
+
+if TYPE_CHECKING:
+    from pipeline.schema import SummaryResult
 
 
 def _calc_week_number(date_str: str, semester_start: str) -> int:
@@ -191,6 +196,76 @@ def _markdown_to_blocks(text: str) -> list[dict]:
     return blocks
 
 
+def _quote(text: str) -> dict:
+    return {"object": "block", "type": "quote",
+            "quote": {"rich_text": _rich(text[:MAX_LEN])}}
+
+
+def _summary_result_to_blocks(result: SummaryResult) -> list[dict]:
+    """SummaryResult → Notion 블록 목록"""
+    NOTICE_EMOJI = {
+        "assignment": "📝", "exam": "📋",
+        "attendance": "✅", "schedule_change": "📅", "notice": "📢",
+    }
+    blocks = []
+
+    # ── 1. 공지 callout
+    if result.announcements:
+        blocks.append(_heading("중요 공지", 1))
+        blocks.append(_divider())
+        for n in result.announcements:
+            emoji = NOTICE_EMOJI.get(n.type, "📢")
+            text = n.content
+            if n.deadline:
+                text += f"  (기한: {n.deadline})"
+            if n.source_quote:
+                ts = f"  [{n.timestamp}]" if n.timestamp else ""
+                text += f'\n원문: "{n.source_quote}"{ts}'
+            blocks.append(_callout(text, emoji))
+        blocks.append(_divider())
+
+    # ── 2. 토픽별 섹션
+    if result.topics:
+        blocks.append(_heading("강의 요약", 1))
+        blocks.append(_divider())
+        for t in sorted(result.topics, key=lambda x: x.order):
+            if not t.key_points:
+                continue
+
+            # 토픽 제목 H2
+            blocks.append(_heading(f"{t.order}. {t.title}  ({t.time_range})", 2))
+
+            # key_points
+            for kp in t.key_points:
+                blocks.append(_paragraph(f"**{kp.claim}**"))
+                blocks.append(_paragraph(kp.explanation))
+                blocks.append(_quote(f'"{kp.source_quote}"  [{kp.timestamp}]'))
+
+            # important_emphasis
+            if t.important_emphasis:
+                emphasis_text = "  •  ".join(t.important_emphasis)
+                blocks.append(_callout(f"⚠️ 강조: {emphasis_text}", "⚠️"))
+
+            # concepts_introduced
+            if t.concepts_introduced:
+                blocks.append(_paragraph("**핵심 개념**"))
+                for c in t.concepts_introduced:
+                    blocks.append(_bullet(c))
+
+            blocks.append(_divider())
+
+    # ── 3. Q&A 섹션
+    if result.qa_segments:
+        blocks.append(_heading("Q&A", 1))
+        blocks.append(_divider())
+        for qa in result.qa_segments:
+            blocks.append(_bullet(f"Q [{qa.timestamp}]: {qa.question}"))
+            blocks.append(_paragraph(f"  A: {qa.answer}"))
+        blocks.append(_divider())
+
+    return blocks
+
+
 def _notices_to_blocks(notices: list[dict]) -> list[dict]:
     """공지 목록 → callout 블록 목록"""
     if not notices:
@@ -245,6 +320,7 @@ def upload_to_notion(
     lecture_name: str = "",
     created_time: str = "",
     semester_start: str = "2026-03-03",
+    summary_result: SummaryResult | None = None,
 ) -> str:
     """
     Notion 강의 노트 DB에 페이지 생성
@@ -279,9 +355,17 @@ def upload_to_notion(
         properties["과목"] = {"select": {"name": lecture_name}}
 
     # 본문 블록 구성
-    # [공지 callout] → [요약 마크다운 블록] → [원본 toggle]
-    notice_blocks  = _notices_to_blocks(notices)
-    summary_blocks = [_heading("강의 요약", level=1), _divider()] + _markdown_to_blocks(summary) + [_divider()]
+    if summary_result is not None:
+        # 새 구조: SummaryResult 기반
+        content_blocks = _summary_result_to_blocks(summary_result)
+    else:
+        # 구 구조: 마크다운 문자열 기반 (하위 호환)
+        content_blocks = (
+            _notices_to_blocks(notices)
+            + [_heading("강의 요약", level=1), _divider()]
+            + _markdown_to_blocks(summary)
+            + [_divider()]
+        )
     transcript_blocks = _plain_text_blocks(transcript)
 
     # 원본 텍스트는 toggle로 접어서 숨김 (toggle 자체만 첫 배치에 포함)
@@ -294,7 +378,7 @@ def upload_to_notion(
         }
     }
 
-    first_blocks = notice_blocks + summary_blocks + [toggle_block]
+    first_blocks = content_blocks + [toggle_block]
 
     # 페이지 생성 (첫 100개)
     response = client.pages.create(

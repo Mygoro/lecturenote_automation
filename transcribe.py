@@ -87,10 +87,17 @@ def get_audio_duration_minutes(audio_path: str) -> float:
         return 0.0
 
 
-def transcribe_audio(api_key: str, audio_path: str, language: str = "en") -> tuple[str, float]:
+def transcribe_audio(api_key: str, audio_path: str, language: str | None = None) -> tuple:
     """
-    음성 파일 → 텍스트 변환
-    반환: (텍스트, 음성 길이(분))
+    음성 파일 → verbose_json 변환
+    반환: (verbose_json_result, duration_minutes)
+      verbose_json_result: TranscriptionVerbose (openai Pydantic 객체)
+        .text        - 전체 스크립트 문자열
+        .segments[]  - TranscriptionSegment 리스트 (start/end: float 초 단위)
+        .language    - Whisper 감지 언어 코드 (예: "korean", "english")
+        .duration    - 오디오 길이(초)
+    청크 분할 시에는 동일 필드를 가진 dict 반환 (segments.start/end는 원본 기준으로 보정됨)
+    language=None이면 Whisper 자동 감지 사용
     1. 원본 파일이 25MB 이하면 바로 전송
     2. 초과 시 ffmpeg로 32kbps 모노 압축 (빠름, 보통 여기서 해결됨)
     3. 압축 후에도 초과 시 청크 분할 (긴 강의 대비 안전망)
@@ -176,20 +183,22 @@ def _remove_repetition(text: str) -> str:
     return result
 
 
-def _transcribe_single(client: OpenAI, audio_path: str, language: str, retries: int = 3) -> str:
-    """단일 파일 변환. 타임아웃 시 최대 3회 재시도."""
+def _transcribe_single(client: OpenAI, audio_path: str, language: str | None, retries: int = 3):
+    """단일 파일 변환. 타임아웃 시 최대 3회 재시도. verbose_json 객체 반환."""
     import time
     for attempt in range(retries):
         try:
             with open(audio_path, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language=language,
-                    response_format="text",
-                    timeout=300,
-                )
-            return _remove_repetition(transcript)
+                kwargs = {
+                    "model": "whisper-1",
+                    "file": audio_file,
+                    "response_format": "verbose_json",
+                    "timeout": 300,
+                }
+                if language is not None:
+                    kwargs["language"] = language
+                transcript = client.audio.transcriptions.create(**kwargs)
+            return transcript
         except Exception as e:
             if attempt < retries - 1 and "timed out" in str(e).lower():
                 wait = 10 * (attempt + 1)
@@ -199,9 +208,10 @@ def _transcribe_single(client: OpenAI, audio_path: str, language: str, retries: 
                 raise
 
 
-def _transcribe_chunked(client: OpenAI, audio_path: str, language: str) -> str:
+def _transcribe_chunked(client: OpenAI, audio_path: str, language: str | None) -> dict:
     """
     25MB 초과 파일을 ffmpeg로 10분 단위 분할 후 변환
+    반환: {"text", "segments", "language", "duration"} — segments.start/end는 원본 기준 초 단위로 보정됨
     """
     import json as _json
 
@@ -219,7 +229,9 @@ def _transcribe_chunked(client: OpenAI, audio_path: str, language: str) -> str:
     total_chunks = len(starts)
 
     temp_dir = Path(audio_path).parent
-    full_transcript = []
+    all_segments = []
+    all_text_parts = []
+    detected_language = None
     chunk_files = []
 
     try:
@@ -236,14 +248,29 @@ def _transcribe_chunked(client: OpenAI, audio_path: str, language: str) -> str:
                 raise RuntimeError(f"청크 분할 실패 (청크 {i}): {r.stderr}")
             chunk_files.append(chunk_path)
 
-        for i, chunk_path in enumerate(chunk_files):
+        for i, (chunk_path, start) in enumerate(zip(chunk_files, starts)):
             print(f"  청크 {i+1}/{total_chunks} 변환 중...")
-            text = _transcribe_single(client, chunk_path, language)
-            full_transcript.append(text)
+            chunk_result = _transcribe_single(client, chunk_path, language)
+
+            if detected_language is None:
+                detected_language = getattr(chunk_result, "language", None)
+
+            all_text_parts.append(getattr(chunk_result, "text", "") or "")
+
+            # 세그먼트 타임스탬프를 청크 시작 오프셋만큼 보정
+            for seg in (getattr(chunk_result, "segments", []) or []):
+                seg_dict = seg if isinstance(seg, dict) else vars(seg)
+                adjusted = {**seg_dict, "start": seg_dict["start"] + start, "end": seg_dict["end"] + start}
+                all_segments.append(adjusted)
 
     finally:
         for f in chunk_files:
             if Path(f).exists():
                 Path(f).unlink()
 
-    return "\n".join(full_transcript)
+    return {
+        "text": "\n".join(all_text_parts),
+        "segments": all_segments,
+        "language": detected_language,
+        "duration": total_seconds,
+    }

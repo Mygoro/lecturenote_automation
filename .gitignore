@@ -5,6 +5,7 @@ google_credentials.json
 
 # 처리 상태 파일 (로컬 전용)
 processed_files.json
+test_fixture.json
 
 # Python 캐시
 __pycache__/

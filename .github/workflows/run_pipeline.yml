@@ -1,0 +1,45 @@
+name: Run Lecture Pipeline
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+    - cron: '0 3 * * *'
+    - cron: '0 5 * * *'
+    - cron: '0 7 * * *'
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Restore google_credentials.json
+        run: echo "${{ secrets.GOOGLE_CREDENTIALS }}" | base64 -d > google_credentials.json
+
+      - name: Restore token.json
+        run: echo "${{ secrets.GOOGLE_TOKEN }}" | base64 -d > token.json
+
+      - name: Run pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          SEMESTER_START: "2026-03-03"
+        run: python main.py

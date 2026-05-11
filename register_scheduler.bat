@@ -8,11 +8,11 @@ echo ====================================
 set SCRIPT_DIR=%~dp0
 set PYTHON_SCRIPT=%SCRIPT_DIR%main.py
 
-:: Python 경로 확인
-for /f "tokens=*" %%i in ('where python 2^>nul') do set PYTHON_PATH=%%i
+:: Python 경로 고정
+set PYTHON_PATH=C:\Python310\python.exe
 
-if "%PYTHON_PATH%"=="" (
-    echo [오류] Python이 설치되어 있지 않거나 PATH에 없습니다.
+if not exist "%PYTHON_PATH%" (
+    echo [오류] Python을 찾을 수 없습니다: %PYTHON_PATH%
     pause
     exit /b 1
 )

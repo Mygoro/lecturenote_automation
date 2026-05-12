@@ -321,6 +321,7 @@ def upload_to_notion(
     created_time: str = "",
     semester_start: str = "2026-03-03",
     summary_result: SummaryResult | None = None,
+    drive_file_id: str = "",
 ) -> str:
     """
     Notion 강의 노트 DB에 페이지 생성
@@ -353,6 +354,8 @@ def upload_to_notion(
     }
     if lecture_name:
         properties["과목"] = {"select": {"name": lecture_name}}
+    if drive_file_id:
+        properties["파일ID"] = {"rich_text": [{"text": {"content": drive_file_id}}]}
 
     # 본문 블록 구성
     if summary_result is not None:
@@ -381,11 +384,23 @@ def upload_to_notion(
     first_blocks = content_blocks + [toggle_block]
 
     # 페이지 생성 (첫 100개)
-    response = client.pages.create(
-        parent={"database_id": database_id},
-        properties=properties,
-        children=first_blocks[:100],
-    )
+    try:
+        response = client.pages.create(
+            parent={"database_id": database_id},
+            properties=properties,
+            children=first_blocks[:100],
+        )
+    except Exception as e:
+        if "파일ID" in str(e) and "not a property" in str(e):
+            print("  [warn] 파일ID 속성 없음 - 해당 속성 제외하고 재시도")
+            properties.pop("파일ID", None)
+            response = client.pages.create(
+                parent={"database_id": database_id},
+                properties=properties,
+                children=first_blocks[:100],
+            )
+        else:
+            raise
     page_id  = response["id"]
     page_url = response["url"]
 

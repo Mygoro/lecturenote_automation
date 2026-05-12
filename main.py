@@ -8,7 +8,6 @@ Windows 작업 스케줄러 등록 방법은 README 참고
 """
 
 import os
-import json
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -23,6 +22,7 @@ if sys.stderr.encoding != "utf-8":
 # .env 파일 로드 (시스템 환경변수보다 .env 파일을 우선 적용)
 load_dotenv(Path(__file__).parent / ".env", override=True)
 
+from notion_client import Client as NotionClient
 from drive_monitor import get_drive_service, get_new_audio_files, download_file
 from transcribe import transcribe_audio
 from summarize import process_transcript
@@ -33,7 +33,6 @@ from notion_uploader import upload_to_notion
 # ────────────────────────────────────────────
 BASE_DIR         = Path(__file__).parent
 TEMP_DIR         = BASE_DIR / "temp_audio"
-PROCESSED_FILE   = BASE_DIR / "processed_files.json"
 CREDENTIALS_FILE = BASE_DIR / "google_credentials.json"
 LOCK_FILE        = BASE_DIR / ".running.lock"
 
@@ -47,18 +46,30 @@ SEMESTER_START             = os.getenv("SEMESTER_START", "2026-03-02")
 
 
 def load_processed() -> set:
-    """처리 완료된 파일 ID 목록 로드"""
-    if PROCESSED_FILE.exists():
-        with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return set(data.get("processed_ids", []))
-    return set()
+    """Notion DB의 파일ID 속성을 조회해서 처리 완료된 Drive 파일 ID set 반환"""
+    client = NotionClient(auth=NOTION_TOKEN)
+    processed_ids = set()
+    has_more = True
+    start_cursor = None
 
+    while has_more:
+        kwargs = {"database_id": NOTION_DATABASE_ID}
+        if start_cursor:
+            kwargs["start_cursor"] = start_cursor
+        response = client.databases.query(**kwargs)
 
-def save_processed(processed_ids: set):
-    """처리 완료된 파일 ID 목록 저장"""
-    with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
-        json.dump({"processed_ids": list(processed_ids)}, f, ensure_ascii=False, indent=2)
+        for page in response.get("results", []):
+            prop = page.get("properties", {}).get("파일ID", {})
+            rich_text = prop.get("rich_text", [])
+            if rich_text:
+                fid = rich_text[0].get("text", {}).get("content", "")
+                if fid:
+                    processed_ids.add(fid)
+
+        has_more = response.get("has_more", False)
+        start_cursor = response.get("next_cursor")
+
+    return processed_ids
 
 
 def check_env():
@@ -118,7 +129,7 @@ def print_cost_report(duration_minutes: float, usage_by_model: dict):
     print(f"  └──────────────────────────────────────────┘")
 
 
-def process_file(service, file_info: dict, processed_ids: set):
+def process_file(service, file_info: dict):
     """단일 파일 전체 처리 (다운로드 → 변환 → 요약 → 노션 업로드)"""
     file_id   = file_info["id"]
     file_name = file_info["name"]
@@ -161,12 +172,9 @@ def process_file(service, file_info: dict, processed_ids: set):
             lecture_name=file_info.get("lecture_name", ""),
             created_time=created,
             semester_start=SEMESTER_START,
+            drive_file_id=file_id,
         )
         print(f"   완료: {page_url}")
-
-        # 5. 처리 완료 기록
-        processed_ids.add(file_id)
-        save_processed(processed_ids)
         print(f"✅ 처리 완료: {file_name}")
 
     except Exception as e:
@@ -201,7 +209,8 @@ def _main():
     # 환경변수 확인
     check_env()
 
-    # 처리 완료 목록 로드
+    # Notion DB에서 처리 완료 파일 ID 로드
+    print("\n📋 Notion DB에서 처리 이력 확인 중...")
     processed_ids = load_processed()
     print(f"   기존 처리 파일: {len(processed_ids)}개")
 
@@ -224,7 +233,7 @@ def _main():
     success_count = 0
     for file_info in new_files:
         try:
-            process_file(service, file_info, processed_ids)
+            process_file(service, file_info)
             success_count += 1
         except Exception:
             print(f"   이 파일은 건너뜁니다.")

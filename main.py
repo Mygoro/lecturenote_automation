@@ -155,7 +155,7 @@ def process_file(service, file_info: dict):
 
         # 3. 정제 → 공지 추출 → 요약
         print("🤖 Claude 3단계 처리 중...")
-        cleaned, notices, summary, claude_usage = process_transcript(ANTHROPIC_API_KEY, transcript)
+        cleaned, notices, summary, claude_usage, summary_result = process_transcript(ANTHROPIC_API_KEY, transcript)
         print(f"   완료 (공지 {len(notices)}건, 요약 {len(summary)}자)")
 
         # 비용 리포트
@@ -174,6 +174,7 @@ def process_file(service, file_info: dict):
             created_time=created,
             semester_start=SEMESTER_START,
             drive_file_id=file_id,
+            summary_result=summary_result,
         )
         print(f"   완료: {page_url}")
         print(f"✅ 처리 완료: {file_name}")

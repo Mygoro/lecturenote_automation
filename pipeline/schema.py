@@ -43,6 +43,8 @@ class TopicSummary:
     key_points: list[KeyPoint]
     important_emphasis: list[str]
     concepts_introduced: list[str]
+    summary_oneliner: str = ""
+    keywords_with_brief: list[dict] = field(default_factory=list)
 
 
 @dataclass

@@ -33,8 +33,24 @@ SUMMARIZE_TOOL = {
             },
             "important_emphasis":  {"type": "array", "items": {"type": "string"}},
             "concepts_introduced": {"type": "array", "items": {"type": "string"}},
+            "summary_oneliner": {
+                "type": "string",
+                "description": "이 토픽의 핵심을 한국어 한 줄로 (30자 이내)",
+            },
+            "keywords_with_brief": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {"type": "string"},
+                        "brief":   {"type": "string"},
+                    },
+                    "required": ["keyword", "brief"],
+                },
+                "description": "핵심 키워드 3~5개, 각각 영어 원문 keyword + 한국어 brief (10~20자)",
+            },
         },
-        "required": ["key_points", "important_emphasis", "concepts_introduced"],
+        "required": ["key_points", "important_emphasis", "concepts_introduced", "summary_oneliner", "keywords_with_brief"],
     },
 }
 
@@ -79,7 +95,9 @@ Language rules (strictly follow):
 - source_quote: English only — copy the professor's exact words from the transcript verbatim.
 - timestamp: HH:MM:SS format.
 - important_emphasis: Korean only — rephrase the emphasis point in Korean.
-- concepts_introduced: English only — list the original English technical terms.\
+- concepts_introduced: English only — list the original English technical terms.
+- summary_oneliner: Korean only — 이 토픽의 핵심 메시지를 한국어 한 줄로, 30자 이내.
+- keywords_with_brief: keyword는 English only (원문 그대로), brief는 Korean only (10~20자 짧은 설명).\
 """
 
 EXTRACT_QA_SYSTEM = """\
@@ -171,6 +189,8 @@ def _summarize_topic(
                     ],
                     important_emphasis=d.get("important_emphasis", []),
                     concepts_introduced=d.get("concepts_introduced", []),
+                    summary_oneliner=d.get("summary_oneliner", ""),
+                    keywords_with_brief=d.get("keywords_with_brief", []),
                 )
 
     print(f"  [skip] 토픽 '{topic.title}' 3회 실패 - 결과에서 제외")

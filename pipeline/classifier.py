@@ -74,6 +74,7 @@ from the segment that contains the most specific information (deadline, grade we
 
 For each segment assign exactly one label.
 For 'announcement' segments only, extract notices (type, content, deadline).
+  - content: write in Korean (1–2 sentences summarizing the announcement)
 For all other labels set notices to [].
 Do not invent content. Base decisions solely on the provided text.\
 """

@@ -45,4 +45,4 @@ jobs:
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           SEMESTER_START: "2026-03-03"
-        run: python main.py
+        run: python -u main.py

@@ -43,6 +43,7 @@ NOTION_DATABASE_ID  = os.getenv("NOTION_DATABASE_ID")
 DRIVE_FOLDER_ID            = os.getenv("DRIVE_FOLDER_ID")
 EXTRACURRICULAR_FOLDER_ID  = os.getenv("EXTRACURRICULAR_FOLDER_ID")  # 비교과 폴더 (선택)
 SEMESTER_START             = os.getenv("SEMESTER_START", "2026-03-02")
+MAX_FILES_PER_RUN          = int(os.environ.get("MAX_FILES_PER_RUN", "1"))
 
 
 def load_processed() -> set:
@@ -231,7 +232,7 @@ def _main():
 
     # 각 파일 처리
     success_count = 0
-    for file_info in new_files[:1]:
+    for file_info in new_files[:MAX_FILES_PER_RUN]:
         try:
             process_file(service, file_info)
             success_count += 1

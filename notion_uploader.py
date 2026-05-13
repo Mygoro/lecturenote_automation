@@ -355,7 +355,7 @@ def upload_to_notion(
     if lecture_name:
         properties["과목"] = {"select": {"name": lecture_name}}
     if drive_file_id:
-        properties["파일ID"] = {"rich_text": [{"text": {"content": drive_file_id}}]}
+        properties["파일 ID"] = {"rich_text": [{"text": {"content": drive_file_id}}]}
 
     # 본문 블록 구성
     if summary_result is not None:
@@ -391,9 +391,9 @@ def upload_to_notion(
             children=first_blocks[:100],
         )
     except Exception as e:
-        if "파일ID" in str(e) and "not a property" in str(e):
-            print("  [warn] 파일ID 속성 없음 - 해당 속성 제외하고 재시도")
-            properties.pop("파일ID", None)
+        if "파일 ID" in str(e) and "not a property" in str(e):
+            print("  [warn] 파일 ID 속성 없음 - 해당 속성 제외하고 재시도")
+            properties.pop("파일 ID", None)
             response = client.pages.create(
                 parent={"database_id": database_id},
                 properties=properties,

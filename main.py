@@ -46,7 +46,7 @@ SEMESTER_START             = os.getenv("SEMESTER_START", "2026-03-02")
 
 
 def load_processed() -> set:
-    """Notion DB의 파일ID 속성을 조회해서 처리 완료된 Drive 파일 ID set 반환"""
+    """Notion DB의 파일 ID 속성을 조회해서 처리 완료된 Drive 파일 ID set 반환"""
     client = NotionClient(auth=NOTION_TOKEN)
     processed_ids = set()
     has_more = True
@@ -59,7 +59,7 @@ def load_processed() -> set:
         response = client.databases.query(**kwargs)
 
         for page in response.get("results", []):
-            prop = page.get("properties", {}).get("파일ID", {})
+            prop = page.get("properties", {}).get("파일 ID", {})
             rich_text = prop.get("rich_text", [])
             if rich_text:
                 fid = rich_text[0].get("text", {}).get("content", "")
@@ -231,7 +231,7 @@ def _main():
 
     # 각 파일 처리
     success_count = 0
-    for file_info in new_files:
+    for file_info in new_files[:1]:
         try:
             process_file(service, file_info)
             success_count += 1

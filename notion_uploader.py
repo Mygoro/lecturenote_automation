@@ -122,6 +122,21 @@ def _callout(text: str, emoji: str = "📢") -> dict:
             "callout": {"rich_text": _rich(text[:MAX_LEN]), "icon": {"type": "emoji", "emoji": emoji}}}
 
 
+def _callout_ex(text: str, emoji: str = "📢", color: str = "default", children: list | None = None) -> dict:
+    block = {
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": _rich(text[:MAX_LEN]),
+            "icon": {"type": "emoji", "emoji": emoji},
+            "color": color,
+        }
+    }
+    if children:
+        block["callout"]["children"] = children[:100]
+    return block
+
+
 def _toggle(title: str, children: list[dict]) -> list[dict]:
     """
     Notion toggle 블록. children은 별도 append_blocks로 추가해야 해서
@@ -201,67 +216,77 @@ def _quote(text: str) -> dict:
             "quote": {"rich_text": _rich(text[:MAX_LEN])}}
 
 
+def _paragraph_gray(text: str) -> dict:
+    return {
+        "object": "block",
+        "type": "paragraph",
+        "paragraph": {
+            "rich_text": [{"type": "text", "text": {"content": text[:MAX_LEN]}, "annotations": {"color": "gray"}}]
+        }
+    }
+
+
 def _summary_result_to_blocks(result: SummaryResult) -> list[dict]:
     """SummaryResult → Notion 블록 목록"""
-    NOTICE_EMOJI = {
-        "assignment": "📝", "exam": "📋",
-        "attendance": "✅", "schedule_change": "📅", "notice": "📢",
-    }
     blocks = []
 
-    # ── 1. 공지 callout
+    # ── 1. 공지 섹션 (yellow callout)
     if result.announcements:
-        blocks.append(_heading("중요 공지", 1))
-        blocks.append(_divider())
         for n in result.announcements:
-            emoji = NOTICE_EMOJI.get(n.type, "📢")
-            text = n.content
+            content = n.content
             if n.deadline:
-                text += f"  (기한: {n.deadline})"
+                content += f"  (기한: {n.deadline})"
+            children = []
             if n.source_quote:
                 ts = f"  [{n.timestamp}]" if n.timestamp else ""
-                text += f'\n원문: "{n.source_quote}"{ts}'
-            blocks.append(_callout(text, emoji))
+                children.append(_paragraph_gray(f'"{n.source_quote}"{ts}'))
+            blocks.append(_callout_ex(f"**{content}**", emoji="📢", color="yellow_background", children=children))
         blocks.append(_divider())
 
-    # ── 2. 토픽별 섹션
-    if result.topics:
-        blocks.append(_heading("강의 요약", 1))
+    # ── 2. 토픽 섹션
+    for t in sorted(result.topics, key=lambda x: x.order):
+        if not t.key_points:
+            continue
+
+        # a. H2 제목
+        blocks.append(_heading(f"🎯 {t.title}", 2))
+
+        # b. 한눈에 보기 callout (blue)
+        callout_children = [
+            _bullet(f"**{kw['keyword']}** — {kw['brief']}")
+            for kw in (t.keywords_with_brief or [])
+        ]
+        if t.concepts_introduced:
+            callout_children.append(_paragraph("**개념**: " + " · ".join(t.concepts_introduced)))
+        blocks.append(_callout_ex(
+            f"**핵심**: {t.summary_oneliner}",
+            emoji="💡",
+            color="blue_background",
+            children=callout_children,
+        ))
+
+        # c. key_points: explanation(bold) → quote(source_quote) → timestamp(gray)
+        for kp in t.key_points:
+            blocks.append(_paragraph(f"**{kp.explanation}**"))
+            if kp.source_quote:
+                blocks.append(_quote(f'"{kp.source_quote}"'))
+            blocks.append(_paragraph_gray(kp.timestamp))
+
+        # d. important_emphasis (red callout)
+        if t.important_emphasis:
+            emphasis_children = [_paragraph(e) for e in t.important_emphasis]
+            blocks.append(_callout_ex("⚠️ 강조", emoji="⚠️", color="red_background", children=emphasis_children))
+
+        # e. divider
         blocks.append(_divider())
-        for t in sorted(result.topics, key=lambda x: x.order):
-            if not t.key_points:
-                continue
 
-            # 토픽 제목 H2
-            blocks.append(_heading(f"{t.order}. {t.title}  ({t.time_range})", 2))
-
-            # key_points
-            for kp in t.key_points:
-                blocks.append(_paragraph(f"**{kp.claim}**"))
-                blocks.append(_paragraph(kp.explanation))
-                blocks.append(_quote(f'"{kp.source_quote}"  [{kp.timestamp}]'))
-
-            # important_emphasis
-            if t.important_emphasis:
-                emphasis_text = "  •  ".join(t.important_emphasis)
-                blocks.append(_callout(f"⚠️ 강조: {emphasis_text}", "⚠️"))
-
-            # concepts_introduced
-            if t.concepts_introduced:
-                blocks.append(_paragraph("**핵심 개념**"))
-                for c in t.concepts_introduced:
-                    blocks.append(_bullet(c))
-
-            blocks.append(_divider())
-
-    # ── 3. Q&A 섹션
+    # ── 3. Q&A toggle
     if result.qa_segments:
-        blocks.append(_heading("Q&A", 1))
-        blocks.append(_divider())
+        qa_blocks = []
         for qa in result.qa_segments:
-            blocks.append(_bullet(f"Q [{qa.timestamp}]: {qa.question}"))
-            blocks.append(_paragraph(f"  A: {qa.answer}"))
-        blocks.append(_divider())
+            qa_blocks.append(_paragraph(f"Q [{qa.timestamp}]: {qa.question}"))
+            qa_blocks.append(_paragraph(f"A: {qa.answer}"))
+        blocks.extend(_toggle("Q&A", qa_blocks))
 
     return blocks
 

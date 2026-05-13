@@ -15,3 +15,6 @@ __pycache__/
 
 # 임시 파일
 temp_audio/
+
+# 로컬 테스트 스크립트
+run_fixture.py

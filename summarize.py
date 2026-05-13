@@ -73,4 +73,4 @@ def process_transcript(api_key: str, raw_transcript) -> tuple[str, list[dict], s
     ]
     summary_markdown = _summary_to_markdown(result)
 
-    return result.full_transcript, notices, summary_markdown, usage_by_model
+    return result.full_transcript, notices, summary_markdown, usage_by_model, result

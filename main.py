@@ -9,6 +9,7 @@ Windows 작업 스케줄러 등록 방법은 README 참고
 
 import os
 import sys
+import traceback
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -181,6 +182,7 @@ def process_file(service, file_info: dict):
 
     except Exception as e:
         print(f"❌ 오류 발생 ({file_name}): {e}")
+        traceback.print_exc()
         raise
 
     finally:

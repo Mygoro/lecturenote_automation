@@ -152,7 +152,7 @@ def process_file(service, file_info: dict):
         # 2. 음성 → 텍스트
         print("🎤 Whisper로 텍스트 변환 중...")
         transcript, duration_minutes = transcribe_audio(OPENAI_API_KEY, local_path)
-        print(f"   완료 ({len(transcript)}자, {duration_minutes:.1f}분)")
+        print(f"   완료 ({len(transcript.text)}자, {duration_minutes:.1f}분)")
 
         # 3. 정제 → 공지 추출 → 요약
         print("🤖 Claude 3단계 처리 중...")

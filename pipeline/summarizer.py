@@ -228,7 +228,7 @@ def _extract_qa(
                     answer=q["answer"],
                     timestamp=q["timestamp"],
                 )
-                for q in block.input["qa_segments"]
+                for q in block.input.get("qa_segments", [])
             ]
 
     raise RuntimeError("Sonnet did not return extract_qa block")

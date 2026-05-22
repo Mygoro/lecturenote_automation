@@ -10,6 +10,7 @@ Notion API로 강의 노트 데이터베이스에 페이지를 생성하는 모�
 """
 
 from __future__ import annotations
+import re
 from datetime import datetime, date as date_type
 from typing import TYPE_CHECKING
 from notion_client import Client
@@ -26,13 +27,36 @@ def _calc_week_number(date_str: str, semester_start: str) -> int:
     return max(1, delta // 7 + 1)
 
 
-def _resolve_title(client: Client, database_id: str, lecture_name: str, week_num: int) -> str:
+def _extract_week_from_filename(file_name: str) -> int | None:
+    """파일명에서 'N주차' 패턴을 추출. 패턴이 없으면 None.
+
+    예: "AI Agents 9주차.aac" → 9, "FW 7주차(1).m4a" → 7
+    """
+    if not file_name:
+        return None
+    m = re.search(r"(\d+)주차", file_name)
+    return int(m.group(1)) if m else None
+
+
+def _resolve_title(
+    client: Client,
+    database_id: str,
+    lecture_name: str,
+    week_num: int,
+    file_name: str = "",
+) -> str:
     """
     같은 과목+주차 기존 페이지 수를 확인해 제목 결정
     - 기존 0개 → "[과목] N주차"
     - 기존 1개 (부 번호 없음) → 기존 페이지에 "1부" 소급 추가, 새 페이지 "2부"
     - 기존에 이미 부 번호 있음 → count+1 부
+
+    주차는 file_name 파싱을 먼저 시도하고, 실패 시 인자로 받은 week_num을 사용.
     """
+    parsed_week = _extract_week_from_filename(file_name)
+    if parsed_week is not None:
+        week_num = parsed_week
+
     base = f"[{lecture_name}] {week_num}주차" if lecture_name else f"{week_num}주차"
 
     # 같은 과목+주차 페이지 조회
@@ -367,8 +391,9 @@ def upload_to_notion(
         date_str = datetime.now().strftime("%Y-%m-%d")
 
     # 주차 계산 + 중복 여부 확인해서 제목 결정
+    # week_num은 폴백값 — _resolve_title이 file_name 파싱을 우선 시도
     week_num = _calc_week_number(date_str, semester_start)
-    title = _resolve_title(client, database_id, lecture_name, week_num)
+    title = _resolve_title(client, database_id, lecture_name, week_num, file_name)
     print(f"  페이지 제목: {title}")
 
     # 페이지 속성

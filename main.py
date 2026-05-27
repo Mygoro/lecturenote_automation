@@ -46,6 +46,12 @@ EXTRACURRICULAR_FOLDER_ID  = os.getenv("EXTRACURRICULAR_FOLDER_ID")  # 비교과
 SEMESTER_START             = os.getenv("SEMESTER_START", "2026-03-02")
 MAX_FILES_PER_RUN          = int(os.environ.get("MAX_FILES_PER_RUN", "1"))
 
+# 과목별 Whisper 언어 코드 (미지정 시 자동 감지)
+# key: Drive 폴더명 (lecture_name), value: Whisper language 코드
+COURSE_LANGUAGES: dict[str, str] = {
+    "RDQM": "en",
+}
+
 
 def load_processed() -> set:
     """Notion DB의 파일 ID 속성을 조회해서 처리 완료된 Drive 파일 ID set 반환"""
@@ -151,7 +157,10 @@ def process_file(service, file_info: dict):
 
         # 2. 음성 → 텍스트
         print("🎤 Whisper로 텍스트 변환 중...")
-        transcript, duration_minutes = transcribe_audio(OPENAI_API_KEY, local_path)
+        language = COURSE_LANGUAGES.get(file_info.get("lecture_name", ""))
+        if language:
+            print(f"   언어 지정: {language}")
+        transcript, duration_minutes = transcribe_audio(OPENAI_API_KEY, local_path, language=language)
         print(f"   완료 ({len(transcript.text if hasattr(transcript, 'text') else transcript['text'])}자, {duration_minutes:.1f}분)")
 
         # 3. 정제 → 공지 추출 → 요약

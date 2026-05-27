@@ -121,22 +121,32 @@ def transcribe_audio(api_key: str, audio_path: str, language: str | None = None)
 
         # 25MB 이하: 바로 전송
         if file_size <= MAX_FILE_SIZE_BYTES:
-            return _transcribe_single(client, audio_path, language), duration_minutes
+            result = _transcribe_single(client, audio_path, language)
+        else:
+            # 25MB 초과: 압축 시도
+            print("  25MB 초과 → 압축 중 (32kbps 모노)...")
+            compressed = _compress_to_mp3(audio_path)
+            temp_files.append(compressed)
 
-        # 25MB 초과: 압축 시도
-        print("  25MB 초과 → 압축 중 (32kbps 모노)...")
-        compressed = _compress_to_mp3(audio_path)
-        temp_files.append(compressed)
+            compressed_size = os.path.getsize(compressed)
+            print(f"  압축 후 크기: {compressed_size / 1024 / 1024:.1f}MB")
 
-        compressed_size = os.path.getsize(compressed)
-        print(f"  압축 후 크기: {compressed_size / 1024 / 1024:.1f}MB")
+            if compressed_size <= MAX_FILE_SIZE_BYTES:
+                result = _transcribe_single(client, compressed, language)
+            else:
+                print("  압축 후에도 초과 → 청크 분할 변환...")
+                result = _transcribe_chunked(client, compressed, language)
 
-        if compressed_size <= MAX_FILE_SIZE_BYTES:
-            return _transcribe_single(client, compressed, language), duration_minutes
+        text = getattr(result, "text", None) or result.get("text", "")
+        if _is_hallucination(text, duration_minutes):
+            detected_lang = getattr(result, "language", None) or result.get("language", "unknown")
+            raise ValueError(
+                f"Whisper 환각 감지 (감지 언어={detected_lang}, "
+                f"{len(text.strip()) / max(duration_minutes, 1):.0f}자/분) — "
+                f"Notion 업로드를 중단합니다"
+            )
 
-        # 압축 후에도 초과 시 청크 분할 (매우 긴 강의)
-        print("  압축 후에도 초과 → 청크 분할 변환...")
-        return _transcribe_chunked(client, compressed, language), duration_minutes
+        return result, duration_minutes
 
     finally:
         for f in temp_files:
@@ -181,6 +191,42 @@ def _remove_repetition(text: str) -> str:
     result = re.sub(r'(.{2,30}?)(\s*\1){4,}', r'\1', result)
 
     return result
+
+
+def _is_hallucination(text: str, duration_minutes: float) -> bool:
+    """
+    Whisper 환각 감지. True이면 변환 결과를 신뢰할 수 없음.
+
+    감지 기준:
+    - 분당 글자 수 30 미만 (음성 인식 실패)
+    - CJK 한자 비율 15% 초과 (중국어 환각)
+    - 비ASCII·비한글 문자 비율 10% 초과 (칸나다어 등 이국 언어 환각)
+    """
+    stripped = text.strip()
+    if not stripped:
+        return True
+
+    n = len(stripped)
+
+    if n / max(duration_minutes, 1) < 30:
+        return True
+
+    cjk = sum(1 for c in stripped if '一' <= c <= '鿿')
+    if cjk / n > 0.15:
+        return True
+
+    def _expected(c: str) -> bool:
+        return (
+            c.isascii()
+            or '가' <= c <= '힣'  # 완성형 한글
+            or '㄰' <= c <= '㆏'  # 한글 자모
+        )
+
+    unexpected = sum(1 for c in stripped if not _expected(c))
+    if unexpected / n > 0.10:
+        return True
+
+    return False
 
 
 def _transcribe_single(client: OpenAI, audio_path: str, language: str | None, retries: int = 3):

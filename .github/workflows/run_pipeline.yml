@@ -33,7 +33,9 @@ jobs:
         run: pip show openai httpx anthropic
 
       - name: Install ffmpeg
-        run: sudo apt-get install -y ffmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
 
       - name: Restore google_credentials.json
         run: echo "${{ secrets.GOOGLE_CREDENTIALS }}" | base64 -d > google_credentials.json

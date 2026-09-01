@@ -106,8 +106,8 @@ def check_env():
 WHISPER_COST_PER_MIN = 0.006                        # $0.006 / 분
 HAIKU_IN   =  0.8 / 1_000_000                       # $0.80  / 1M input
 HAIKU_OUT  =  4.0 / 1_000_000                       # $4.00  / 1M output
-SONNET_IN  =  3.0 / 1_000_000                       # $3.00  / 1M input
-SONNET_OUT = 15.0 / 1_000_000                       # $15.00 / 1M output
+SONNET_IN  =  2.0 / 1_000_000                       # $2.00  / 1M input  (Sonnet 5)
+SONNET_OUT = 10.0 / 1_000_000                       # $10.00 / 1M output (Sonnet 5)
 USD_TO_KRW = 1380
 
 

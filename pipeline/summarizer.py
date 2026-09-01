@@ -1,20 +1,18 @@
+import json
+import re
+
 import anthropic
 from pipeline.schema import (
-    LabeledSegment, Topic,
+    LabeledSegment, Topic, Structure,
     KeyPoint, TopicSummary, Notice, QASegment, SummaryResult,
 )
 from pipeline.segmenter import _fmt
 
 MODEL = "claude-sonnet-5"
 
-EMPHASIS_KEYWORDS = [
-    "this is important", "key point", "remember", "critical",
-    "make sure", "pay attention", "crucial", "essential",
-]
-
 SUMMARIZE_TOOL = {
     "name": "summarize_topic",
-    "description": "Summarize one lecture topic with key points, emphasis, and concepts",
+    "description": "Summarize one lecture topic with key points and concepts",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -26,12 +24,10 @@ SUMMARIZE_TOOL = {
                         "claim":        {"type": "string"},
                         "explanation":  {"type": "string"},
                         "source_quote": {"type": "string"},
-                        "timestamp":    {"type": "string", "description": "HH:MM:SS"},
                     },
-                    "required": ["claim", "explanation", "source_quote", "timestamp"],
+                    "required": ["claim", "explanation", "source_quote"],
                 },
             },
-            "important_emphasis":  {"type": "array", "items": {"type": "string"}},
             "concepts_introduced": {"type": "array", "items": {"type": "string"}},
             "summary_oneliner": {
                 "type": "string",
@@ -50,7 +46,7 @@ SUMMARIZE_TOOL = {
                 "description": "핵심 키워드 3~5개, 각각 영어 원문 keyword + 한국어 brief (10~20자)",
             },
         },
-        "required": ["key_points", "important_emphasis", "concepts_introduced", "summary_oneliner", "keywords_with_brief"],
+        "required": ["key_points", "concepts_introduced", "summary_oneliner", "keywords_with_brief"],
     },
 }
 
@@ -65,11 +61,10 @@ EXTRACT_QA_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "question":  {"type": "string"},
-                        "answer":    {"type": "string"},
-                        "timestamp": {"type": "string", "description": "HH:MM:SS"},
+                        "question": {"type": "string"},
+                        "answer":   {"type": "string"},
                     },
-                    "required": ["question", "answer", "timestamp"],
+                    "required": ["question", "answer"],
                 },
             }
         },
@@ -77,35 +72,65 @@ EXTRACT_QA_TOOL = {
     },
 }
 
-SUMMARIZE_SYSTEM = f"""\
-You are summarizing a specific topic from a university lecture transcript.
+SUMMARIZE_SYSTEM = (
+    "You are summarizing one topic from a university lecture transcript for a\n"
+    "Korean student who will revise from your notes alone. The audio is NOT\n"
+    "provided alongside, so the notes must stand on their own.\n"
+    "\n"
+    "Coverage - do not drop things:\n"
+    "- Every concrete fact in the provided segments that a student could be tested\n"
+    "  on or graded by must appear in some key_point. Numbers, rules, requirements,\n"
+    "  definitions and named concepts all count.\n"
+    "- Before you finish, re-read the segments and check nothing was left out.\n"
+    "  Prefer merging related facts into one richer key_point over dropping them.\n"
+    "\n"
+    "Brevity - do not pad:\n"
+    "- Do NOT restate the same fact as two key_points.\n"
+    "- The summary must be substantially SHORTER than the transcript it came from.\n"
+    "  A short segment deserves few key_points.\n"
+    "\n"
+    "Quoting:\n"
+    "- source_quote must be copied from the transcript VERBATIM - exact characters,\n"
+    "  no cleanup, no ellipsis, no translation. It is checked against the transcript\n"
+    "  automatically and silently discarded if it does not match.\n"
+    "- Quote a short contiguous span, not a stitched-together passage.\n"
+    "- If no single span supports the point, set source_quote to an empty string.\n"
+    "\n"
+    "Accuracy - the transcript is auto-generated and contains recognition errors:\n"
+    "- Do not invent content. Every claim must be traceable to the transcript.\n"
+    "- If a sentence is garbled or self-contradictory, do NOT guess what it must\n"
+    "  have meant, and NEVER flip its meaning to make it sound sensible. State only\n"
+    "  what is certain and append '(원문 불명확)' to the explanation.\n"
+    "- Rules about attendance, grading and deadlines are the highest risk. Report\n"
+    "  them exactly as stated even when they read oddly.\n"
+    "\n"
+    "Terminology repair - explanation text only, never the quote:\n"
+    "- Speech-to-text mangles technical terms. In explanation, concepts_introduced\n"
+    "  and keywords, write the CORRECT term (e.g. 리스트/튜플/딕셔너리, 반복문,\n"
+    "  파일 입출력, 바이브 코딩, 런어스). Leave source_quote exactly as transcribed.\n"
+    "- Only repair a term when the intended word is unambiguous. Otherwise keep it\n"
+    "  as-is and append '(원문 불명확)'.\n"
+    "\n"
+    "Language:\n"
+    "- claim: English, one concise sentence.\n"
+    "- explanation: Korean. This is the sentence the student actually reads.\n"
+    "- source_quote: verbatim transcript text, whatever language it is in.\n"
+    "- concepts_introduced: the correct term, original language.\n"
+    "- summary_oneliner: Korean, 30자 이내.\n"
+    "- keywords_with_brief: keyword는 원문 용어, brief는 한국어 10~20자.\n"
+)
 
-Rules:
-- Every key_point SHOULD include a source_quote (exact words from the transcript). \
-If a direct quote is not available, set source_quote to empty string and still include the key_point.
-- Every key_point MUST have a timestamp in HH:MM:SS format.
-- important_emphasis: detect phrases like {', '.join(f'"{k}"' for k in EMPHASIS_KEYWORDS)}, \
-or any concept repeated 3 or more times.
-- concepts_introduced: list new technical terms or concepts mentioned for the first time.
-- Do not invent content. Every claim must be traceable to the transcript.
+EXTRACT_QA_SYSTEM = (
+    "You are extracting student questions and professor answers from a lecture\n"
+    "transcript. Record the question and the answer in Korean.\n"
+    "Do not invent content. If the exchange is not clearly a question and an\n"
+    "answer, omit it.\n"
+)
 
-Language rules (strictly follow):
-- claim: English only — write as a concise English sentence matching the source material.
-- explanation: Korean only — explain the claim in Korean for a Korean-speaking student.
-- source_quote: English only — copy the professor's exact words from the transcript verbatim.
-- timestamp: HH:MM:SS format.
-- important_emphasis: Korean only — rephrase the emphasis point in Korean.
-- concepts_introduced: English only — list the original English technical terms.
-- summary_oneliner: Korean only — 이 토픽의 핵심 메시지를 한국어 한 줄로, 30자 이내.
-- keywords_with_brief: keyword는 English only (원문 그대로), brief는 Korean only (10~20자 짧은 설명).\
-"""
 
-EXTRACT_QA_SYSTEM = """\
-You are extracting student questions and professor answers from a lecture transcript.
-For each Q&A exchange, record the question, the answer, and the timestamp (HH:MM:SS) \
-where the question was asked.
-Do not invent content.\
-"""
+def _norm(text: str) -> str:
+    """인용 대조용 정규화: 공백을 모두 제거해 줄바꿈/띄어쓰기 차이를 흡수한다."""
+    return re.sub(r"\s+", "", text or "")
 
 
 def _build_segment_text(segments: list[LabeledSegment], indices: list[int]) -> str:
@@ -113,8 +138,15 @@ def _build_segment_text(segments: list[LabeledSegment], indices: list[int]) -> s
     parts = []
     for seg in segments:
         if seg.index in idx_set:
-            parts.append(f"[{_fmt(seg.start)}]\n{seg.text}")
+            parts.append(seg.text)
     return "\n\n".join(parts)
+
+
+def _unwrap(value, key: str):
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        return parsed[key] if isinstance(parsed, dict) and key in parsed else parsed
+    return value
 
 
 def _summarize_topic(
@@ -168,7 +200,7 @@ def _summarize_topic(
         for block in response.content:
             if block.type == "tool_use" and block.name == "summarize_topic":
                 d = block.input
-                kps = d.get("key_points") or []
+                kps = _unwrap(d.get("key_points") or [], "key_points")
                 if not kps:
                     print(f"  [warn] 토픽 '{topic.title}' key_points 누락 (attempt {attempt+1}/3)")
                     break
@@ -178,17 +210,15 @@ def _summarize_topic(
                     time_range=topic.time_range,
                     key_points=[
                         KeyPoint(
-                            claim=kp["claim"],
-                            explanation=kp["explanation"],
-                            source_quote=kp["source_quote"],
-                            timestamp=kp["timestamp"],
+                            claim=kp.get("claim", ""),
+                            explanation=kp.get("explanation", ""),
+                            source_quote=kp.get("source_quote", ""),
                         )
                         for kp in kps
                     ],
-                    important_emphasis=d.get("important_emphasis", []),
-                    concepts_introduced=d.get("concepts_introduced", []),
+                    concepts_introduced=list(_unwrap(d.get("concepts_introduced", []), "concepts_introduced")),
                     summary_oneliner=d.get("summary_oneliner", ""),
-                    keywords_with_brief=d.get("keywords_with_brief", []),
+                    keywords_with_brief=list(_unwrap(d.get("keywords_with_brief", []), "keywords_with_brief")),
                 )
 
     print(f"  [skip] 토픽 '{topic.title}' 3회 실패 - 결과에서 제외")
@@ -203,10 +233,9 @@ def _extract_qa(
     if not qa_segs:
         return []
 
-    content = "\n\n".join(f"[{_fmt(s.start)}]\n{s.text}" for s in qa_segs)
+    content = "\n\n".join(s.text for s in qa_segs)
     response = client.messages.create(
         model=MODEL,
-        # Sonnet 5는 Sonnet 4.6보다 출력이 길어 1024에서는 잘릴 수 있다
         max_tokens=4096,
         system=EXTRACT_QA_SYSTEM,
         tools=[EXTRACT_QA_TOOL],
@@ -221,25 +250,68 @@ def _extract_qa(
     for block in response.content:
         if block.type == "tool_use" and block.name == "extract_qa":
             return [
-                QASegment(
-                    question=q["question"],
-                    answer=q["answer"],
-                    timestamp=q["timestamp"],
-                )
-                for q in block.input.get("qa_segments", [])
+                QASegment(question=q.get("question", ""), answer=q.get("answer", ""))
+                for q in _unwrap(block.input.get("qa_segments", []), "qa_segments")
             ]
 
     raise RuntimeError("Sonnet did not return extract_qa block")
 
 
+def _verify_quotes(topics: list[TopicSummary], announcements: list[Notice], transcript: str) -> None:
+    """인용이 전사문에 실제로 존재하는지 대조. 없으면 비운다.
+
+    타임스탬프를 버린 대신 이 대조가 유일한 검증 수단이므로 코드로 강제한다.
+    key_point 자체는 남기고 근거 없는 인용만 제거한다.
+    """
+    tnorm = _norm(transcript)
+    kept = dropped = 0
+    for t in topics:
+        for kp in t.key_points:
+            if not kp.source_quote:
+                continue
+            if _norm(kp.source_quote) in tnorm:
+                kept += 1
+            else:
+                dropped += 1
+                kp.source_quote = ""
+    for n in announcements:
+        if not n.source_quote:
+            continue
+        if _norm(n.source_quote) in tnorm:
+            kept += 1
+        else:
+            dropped += 1
+            n.source_quote = ""
+    total = kept + dropped
+    if total:
+        print(f"  인용 대조: {kept}/{total} 원문 일치"
+              + (f" - 불일치 {dropped}건 제거" if dropped else ""))
+
+
+def _build_glossary(topics: list[TopicSummary]) -> list[dict]:
+    """토픽별로 흩어진 키워드/개념을 중복 제거해 하나의 용어집으로 합친다."""
+    seen: dict[str, str] = {}
+    for t in sorted(topics, key=lambda x: x.order):
+        for kw in (t.keywords_with_brief or []):
+            k = (kw.get("keyword") or "").strip()
+            if k and k not in seen:
+                seen[k] = (kw.get("brief") or "").strip()
+        for c in (t.concepts_introduced or []):
+            c = c.strip()
+            if c and c not in seen:
+                seen[c] = ""
+    return [{"keyword": k, "brief": v} for k, v in seen.items()]
+
+
 def build_summary(
-    topics: list[Topic],
+    structure: Structure,
     labeled_segments: list[LabeledSegment],
     lecture_meta: dict,
     api_key: str,
     out_usage: dict | None = None,
 ) -> SummaryResult:
     client = anthropic.Anthropic(api_key=api_key)
+    topics = structure.topics
 
     # 토픽별 요약 (토픽당 Sonnet 1회)
     topic_summaries = []
@@ -264,8 +336,7 @@ def build_summary(
                     type=n.get("type", "notice"),
                     content=n.get("content", ""),
                     deadline=n.get("deadline"),
-                    source_quote="",
-                    timestamp=_fmt(seg.start),
+                    source_quote=n.get("source_quote", ""),
                 ))
 
     # 전체 transcript (순서대로 이어붙임)
@@ -273,10 +344,23 @@ def build_summary(
         s.text for s in sorted(labeled_segments, key=lambda x: x.index)
     )
 
+    _verify_quotes(topic_summaries, announcements, full_transcript)
+
+    summary_chars = sum(
+        len(kp.explanation) + len(kp.source_quote)
+        for t in topic_summaries for kp in t.key_points
+    )
+    if full_transcript:
+        print(f"  본문 압축률: {summary_chars/len(full_transcript):.0%} "
+              f"(전사 {len(full_transcript):,}자 -> 요약 본문 {summary_chars:,}자)")
+
     return SummaryResult(
         lecture_meta=lecture_meta,
         announcements=announcements,
         topics=topic_summaries,
         qa_segments=qa_segments,
         full_transcript=full_transcript,
+        action_items=structure.action_items,
+        uncovered_points=structure.uncovered_points,
+        glossary=_build_glossary(topic_summaries),
     )

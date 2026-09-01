@@ -250,67 +250,94 @@ def _paragraph_gray(text: str) -> dict:
     }
 
 
+def _todo(text: str) -> dict:
+    return {"object": "block", "type": "to_do",
+            "to_do": {"rich_text": _rich(text[:MAX_LEN]), "checked": False}}
+
+
 def _summary_result_to_blocks(result: SummaryResult) -> list[dict]:
-    """SummaryResult → Notion 블록 목록"""
+    """SummaryResult → Notion 블록 목록
+
+    구성 순서: 할 일 체크리스트 → 목차 → 공지 → 토픽 본문 → Q&A → 용어집 → 미반영 항목.
+    타임스탬프는 렌더링하지 않는다. 음성 파일이 노트와 함께 제공되지 않으므로
+    검증에도 복습에도 쓸 수 없고, 청크 시작점이라 값 자체도 부정확하다.
+    근거 표시는 전사문과 대조를 마친 인용문이 담당한다.
+    """
     blocks = []
 
-    # ── 1. 공지 섹션 (yellow callout)
+    # ── 1. 이번 주 할 일 (최상단)
+    if result.action_items:
+        blocks.append(_heading("✅ 이번 주 할 일", 2))
+        for a in result.action_items:
+            blocks.append(_todo(a))
+        blocks.append(_divider())
+
+    # ── 2. 목차 (토픽별 한 줄 핵심)
+    topics_sorted = [t for t in sorted(result.topics, key=lambda x: x.order) if t.key_points]
+    if len(topics_sorted) > 1:
+        toc = []
+        for t in topics_sorted:
+            line = f"**{t.order}. {t.title}**"
+            if t.summary_oneliner:
+                line += f" — {t.summary_oneliner}"
+            toc.append(_bullet(line))
+        blocks.append(_callout_ex("**목차**", emoji="🗂️", color="gray_background", children=toc))
+        blocks.append(_divider())
+
+    # ── 3. 공지 (yellow callout) — 인용이 있으면 근거로 함께 표시
     if result.announcements:
+        blocks.append(_heading("📢 공지 · 운영 규정", 2))
         for n in result.announcements:
             content = n.content
             if n.deadline:
                 content += f"  (기한: {n.deadline})"
             children = []
             if n.source_quote:
-                ts = f"  [{n.timestamp}]" if n.timestamp else ""
-                children.append(_paragraph_gray(f'"{n.source_quote}"{ts}'))
-            blocks.append(_callout_ex(f"**{content}**", emoji="📢", color="yellow_background", children=children))
+                children.append(_paragraph_gray(f'"{n.source_quote}"'))
+                emoji, color = "📢", "yellow_background"
+            else:
+                # 전사문과 대조되는 인용이 없는 공지. 타임스탬프를 버린 이상 대조가
+                # 유일한 검증 수단이므로, 검증되지 않은 공지는 사실처럼 보이면 안 된다.
+                children.append(_paragraph_gray("원문 대조 실패 — 직접 확인하세요"))
+                emoji, color = "❓", "red_background"
+            blocks.append(_callout_ex(f"**{content}**", emoji=emoji,
+                                      color=color, children=children))
         blocks.append(_divider())
 
-    # ── 2. 토픽 섹션
-    for t in sorted(result.topics, key=lambda x: x.order):
-        if not t.key_points:
-            continue
-
-        # a. H2 제목
+    # ── 4. 토픽 본문
+    for t in topics_sorted:
         blocks.append(_heading(f"🎯 {t.title}", 2))
-
-        # b. 한눈에 보기 callout (blue)
-        callout_children = [
-            _bullet(f"**{kw['keyword']}** — {kw['brief']}")
-            for kw in (t.keywords_with_brief or [])
-        ]
-        if t.concepts_introduced:
-            callout_children.append(_paragraph("**개념**: " + " · ".join(t.concepts_introduced)))
-        blocks.append(_callout_ex(
-            f"**핵심**: {t.summary_oneliner}",
-            emoji="💡",
-            color="blue_background",
-            children=callout_children,
-        ))
-
-        # c. key_points: explanation(bold) → quote(source_quote) → timestamp(gray)
+        if t.summary_oneliner:
+            blocks.append(_callout_ex(f"**핵심**: {t.summary_oneliner}",
+                                      emoji="💡", color="blue_background"))
         for kp in t.key_points:
             blocks.append(_paragraph(f"**{kp.explanation}**"))
             if kp.source_quote:
                 blocks.append(_quote(f'"{kp.source_quote}"'))
-            blocks.append(_paragraph_gray(kp.timestamp))
-
-        # d. important_emphasis (red callout)
-        if t.important_emphasis:
-            emphasis_children = [_paragraph(e) for e in t.important_emphasis]
-            blocks.append(_callout_ex("⚠️ 강조", emoji="⚠️", color="red_background", children=emphasis_children))
-
-        # e. divider
         blocks.append(_divider())
 
-    # ── 3. Q&A toggle
+    # ── 5. Q&A toggle
     if result.qa_segments:
         qa_blocks = []
         for qa in result.qa_segments:
-            qa_blocks.append(_paragraph(f"Q [{qa.timestamp}]: {qa.question}"))
+            qa_blocks.append(_paragraph(f"Q: {qa.question}"))
             qa_blocks.append(_paragraph(f"A: {qa.answer}"))
         blocks.extend(_toggle("Q&A", qa_blocks))
+
+    # ── 6. 용어집 (토픽별로 흩어진 키워드/개념을 하나로 통합)
+    if result.glossary:
+        gloss = []
+        for g in result.glossary:
+            kw, brief = g.get("keyword", ""), g.get("brief", "")
+            gloss.append(_bullet(f"**{kw}** — {brief}" if brief else f"**{kw}**"))
+        blocks.extend(_toggle(f"📖 용어집 ({len(result.glossary)}개)", gloss))
+
+    # ── 7. 요약에 반영되지 않은 항목 (structurer의 누락 점검 결과)
+    if result.uncovered_points:
+        unc = [_bullet(u) for u in result.uncovered_points]
+        blocks.append(_callout_ex(
+            "**요약에 반영되지 않은 항목** — 원문에는 있으나 위 토픽에 담기지 않았습니다",
+            emoji="🔎", color="orange_background", children=unc))
 
     return blocks
 
@@ -402,6 +429,16 @@ def upload_to_notion(
         "강의일": {"date": {"start": date_str}},
         "태그": {"multi_select": [{"name": "자동요약"}, {"name": "AI요약"}]},
     }
+
+    # DB 목록에서 내용이 보이도록 토픽별 한 줄 핵심을 이어붙여 넣는다
+    if summary_result is not None:
+        oneliners = [t.summary_oneliner for t in
+                     sorted(summary_result.topics, key=lambda x: x.order)
+                     if t.summary_oneliner]
+        if oneliners:
+            properties["요약"] = {
+                "rich_text": [{"text": {"content": " · ".join(oneliners)[:1900]}}]
+            }
     if lecture_name:
         properties["과목"] = {"select": {"name": lecture_name}}
     if drive_file_id:

@@ -15,32 +15,25 @@ def _make_usage() -> dict:
 
 
 def _summary_to_markdown(result: SummaryResult) -> str:
-    """SummaryResult.topics → 마크다운 요약 텍스트"""
+    """SummaryResult.topics → 마크다운 요약 텍스트 (하위 호환용)"""
     lines = []
     for t in result.topics:
-        lines.append(f"## {t.order}. {t.title}  ({t.time_range})")
+        lines.append(f"## {t.order}. {t.title}")
         for kp in t.key_points:
             lines.append(f"- **{kp.claim}**")
             lines.append(f"  {kp.explanation}")
-            lines.append(f"  > \"{kp.source_quote}\" ({kp.timestamp})")
-        if t.important_emphasis:
-            lines.append("\n**강조 포인트**")
-            for e in t.important_emphasis:
-                lines.append(f"- {e}")
-        if t.concepts_introduced:
-            lines.append("\n**핵심 개념**")
-            for c in t.concepts_introduced:
-                lines.append(f"- {c}")
+            if kp.source_quote:
+                lines.append(f'  > "{kp.source_quote}"')
         lines.append("")
     return "\n".join(lines)
 
 
-def process_transcript(api_key: str, raw_transcript) -> tuple[str, list[dict], str, dict]:
+def process_transcript(api_key: str, raw_transcript) -> tuple:
     """
     파이프라인 진입점. main.py 인터페이스 유지.
 
     raw_transcript: transcribe_audio() 반환값 (TranscriptionVerbose 객체 또는 dict)
-    반환: (full_transcript, notices, summary_markdown, usage_by_model)
+    반환: (full_transcript, notices, summary_markdown, usage_by_model, summary_result)
       usage_by_model = {"haiku": {...}, "sonnet": {...}}
     """
     usage_by_model = {
@@ -61,15 +54,18 @@ def process_transcript(api_key: str, raw_transcript) -> tuple[str, list[dict], s
     label_summary = ", ".join(f"{k}: {v}" for k, v in sorted(label_counts.items()))
     print(f"   라벨별 청크: {label_summary}")
 
-    # 3단계: 토픽 추출 (Sonnet)
+    # 3단계: 토픽 구조 + 할 일 + 누락 점검 (Sonnet 1회)
     print("   [3/4] 토픽 구조 추출 중 (Sonnet)...")
-    topics = extract_structure(labeled, api_key, out_usage=usage_by_model["sonnet"])
-    print(f"   토픽 추출: {len(topics)}개")
+    structure = extract_structure(labeled, api_key, out_usage=usage_by_model["sonnet"])
+    print(f"   토픽 {len(structure.topics)}개, 할 일 {len(structure.action_items)}건, "
+          f"미반영 항목 {len(structure.uncovered_points)}건")
 
     # 4단계: 토픽별 요약 + QA 추출 (Sonnet)
     print("   [4/4] 요약 생성 중 (Sonnet)...")
     lecture_meta = {"course": "", "week": "", "duration": "", "language": ""}
-    result: SummaryResult = build_summary(topics, labeled, lecture_meta, api_key, out_usage=usage_by_model["sonnet"])
+    result: SummaryResult = build_summary(
+        structure, labeled, lecture_meta, api_key, out_usage=usage_by_model["sonnet"]
+    )
 
     # 반환값 변환 (기존 인터페이스 유지)
     notices = [

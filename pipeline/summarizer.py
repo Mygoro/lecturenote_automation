@@ -5,7 +5,7 @@ from pipeline.schema import (
 )
 from pipeline.segmenter import _fmt
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-sonnet-5"
 
 EMPHASIS_KEYWORDS = [
     "this is important", "key point", "remember", "critical",
@@ -141,7 +141,6 @@ def _summarize_topic(
         response = client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            temperature=0.2,
             system=SUMMARIZE_SYSTEM,
             tools=[SUMMARIZE_TOOL],
             tool_choice={"type": "tool", "name": "summarize_topic"},
@@ -157,7 +156,6 @@ def _summarize_topic(
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=8192,
-                temperature=0.2,
                 system=SUMMARIZE_SYSTEM,
                 tools=[SUMMARIZE_TOOL],
                 tool_choice={"type": "tool", "name": "summarize_topic"},
@@ -208,8 +206,8 @@ def _extract_qa(
     content = "\n\n".join(f"[{_fmt(s.start)}]\n{s.text}" for s in qa_segs)
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
-        temperature=0.2,
+        # Sonnet 5는 Sonnet 4.6보다 출력이 길어 1024에서는 잘릴 수 있다
+        max_tokens=4096,
         system=EXTRACT_QA_SYSTEM,
         tools=[EXTRACT_QA_TOOL],
         tool_choice={"type": "tool", "name": "extract_qa"},

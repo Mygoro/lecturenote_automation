@@ -28,12 +28,17 @@ CLASSIFY_TOOL = {
                                 "properties": {
                                     "type": {
                                         "type": "string",
-                                        "enum": ["assignment", "exam", "attendance", "schedule_change", "notice"],
+                                        "enum": ["assignment", "exam", "attendance", "grading",
+                                                 "logistics", "schedule_change", "notice"],
                                     },
                                     "content": {"type": "string"},
                                     "deadline": {"type": ["string", "null"]},
+                                    "source_quote": {
+                                        "type": "string",
+                                        "description": "Verbatim supporting sentence(s) copied from the transcript",
+                                    },
                                 },
-                                "required": ["type", "content", "deadline"],
+                                "required": ["type", "content", "deadline", "source_quote"],
                             },
                         },
                     },
@@ -45,39 +50,51 @@ CLASSIFY_TOOL = {
     },
 }
 
-SYSTEM_PROMPT = """\
-You are classifying segments of a recorded university lecture.
-
-Labels:
-- lecture_core: main lecture content, explanations, theory
-- announcement: a specific assignment, exam, attendance policy change, or schedule change \
-with a concrete deadline or date
-- qa: student questions and professor answers
-- example: worked examples, case studies, demos
-- smalltalk: greetings, off-topic, filler, pauses
-
-Classify as 'announcement' ONLY when ALL of the following apply:
-  - An assignment with an explicit deadline, OR an exam/quiz with a specific date, \
-OR an attendance policy change, OR a class schedule change
-  - The deadline or date is clearly stated (week number, day, or date)
-
-Do NOT classify as 'announcement':
-  - Behavioral instructions without a deadline ("conduct research", "find sources", \
-"start early", "submit before groups are assigned")
-  - Procedural guidance or process descriptions
-  - Sub-items already covered by another announcement in the same or adjacent segment
-
-Duplicate prevention:
-  - If the same assignment appears across multiple segments, extract it ONCE — \
-from the segment that contains the most specific information (deadline, grade weight).
-  - Ignore repeated mentions in other segments.
-
-For each segment assign exactly one label.
-For 'announcement' segments only, extract notices (type, content, deadline).
-  - content: write in Korean (1–2 sentences summarizing the announcement)
-For all other labels set notices to [].
-Do not invent content. Base decisions solely on the provided text.\
-"""
+SYSTEM_PROMPT = (
+    "You are classifying segments of a recorded university lecture.\n"
+    "\n"
+    "Labels:\n"
+    "- lecture_core: main lecture content, explanations, theory\n"
+    "- announcement: course administration the student must act on or be graded by\n"
+    "- qa: student questions and professor answers\n"
+    "- example: worked examples, case studies, demos\n"
+    "- smalltalk: greetings, off-topic, filler, pauses\n"
+    "\n"
+    "Classify as 'announcement' when the segment states ANY of the following.\n"
+    "An explicit deadline is NOT required:\n"
+    "  - assignment / exam / quiz: scope, format, date, weight\n"
+    "  - grading: point allocation, weights, absolute vs relative grading, cutoffs\n"
+    "  - attendance: how attendance is recorded, penalties, how many absences are\n"
+    "    allowed, excused-absence rules and required paperwork, seating rules\n"
+    "  - submission: what to submit, file format, naming, where to upload\n"
+    "  - logistics: class channel (group chat, LMS), where materials are posted,\n"
+    "    equipment to bring, room or schedule changes\n"
+    "\n"
+    "Do NOT classify as 'announcement':\n"
+    "  - Motivational talk or study advice with no rule attached\n"
+    "  - Restating subject matter already covered as lecture content\n"
+    "\n"
+    "Duplicate prevention:\n"
+    "  - If the same rule appears in several segments, extract it ONCE, from the\n"
+    "    segment carrying the most specific information (number, deadline, weight).\n"
+    "\n"
+    "Assign exactly one label per segment.\n"
+    "For 'announcement' segments only, extract notices\n"
+    "(type, content, deadline, source_quote):\n"
+    "  - content: Korean, 1-2 sentences. Keep every number exactly as stated\n"
+    "    (points, counts, weeks, how many absences are allowed).\n"
+    "  - deadline: null when none is stated. Do not invent one.\n"
+    "  - source_quote: copy the supporting sentence(s) from the transcript VERBATIM.\n"
+    "    Never paraphrase, clean up, or translate it. It is used to verify you.\n"
+    "For all other labels set notices to [].\n"
+    "\n"
+    "Accuracy rules - the transcript is auto-generated and contains recognition errors:\n"
+    "  - Do not invent content. Base decisions solely on the provided text.\n"
+    "  - If a sentence is garbled or self-contradictory, do NOT guess what it must\n"
+    "    have meant. State only what is certain and append '(원문 불명확)' to content.\n"
+    "  - NEVER flip the meaning of a rule to make it sound sensible. Attendance and\n"
+    "    grading rules must be reported exactly as stated, even when they read oddly.\n"
+)
 
 
 def _make_batches(segments: list[Segment]) -> list[list[Segment]]:
@@ -106,7 +123,7 @@ def _call_haiku(client: anthropic.Anthropic, batch: list[Segment], out_usage: di
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=4096,
         temperature=0.2,
         system=SYSTEM_PROMPT,
         tools=[CLASSIFY_TOOL],
@@ -117,6 +134,9 @@ def _call_haiku(client: anthropic.Anthropic, batch: list[Segment], out_usage: di
     if out_usage is not None:
         out_usage["input_tokens"]  += response.usage.input_tokens
         out_usage["output_tokens"] += response.usage.output_tokens
+
+    if response.stop_reason == "max_tokens":
+        print("  [warn] 분류 응답이 max_tokens에 걸렸습니다 - 일부 세그먼트가 누락될 수 있습니다")
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "classify_segments":
@@ -134,6 +154,10 @@ def classify_chunks(segments: list[Segment], api_key: str, out_usage: dict | Non
         print(f"  배치 {i+1}/{len(batches)} 분류 중 ({len(batch)}개 세그먼트)...")
         for c in _call_haiku(client, batch, out_usage):
             results[c["index"]] = c
+
+    missing = [s.index for s in segments if s.index not in results]
+    if missing:
+        print(f"  [warn] 분류 결과 누락 {len(missing)}건 -> lecture_core로 폴백: {missing}")
 
     labeled = []
     for seg in segments:

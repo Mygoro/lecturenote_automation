@@ -50,6 +50,6 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          SEMESTER_START: "2026-03-03"
+          SEMESTER_START: "2026-08-31"   # 26-2학기 1주차 월요일
           MAX_FILES_PER_RUN: ${{ inputs.max_files || '1' }}
         run: python -u main.py
